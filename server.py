@@ -4,9 +4,10 @@ POST /train   (Authorization: Bearer <TRAIN_TOKEN>, Körper = np.savez_compresse
     X  uint8 [N,32,32]  Trainingsfelder        Y  int64 [N]  Klassen 0..12
     T  uint8 [M,32,32]  Testfelder (vorher/nachher bewerten)
     P  uint8 [K,32,32]  Felder, die nach dem Training gelesen werden
-    epochs (optional, Standard 2), bs (Losgröße, Standard 256), lr (Standard 5e-4 × bs/256), amp (1 = bf16)
+    epochs (optional, Standard 2), bs (Losgröße, Standard 256), lr (Standard 5e-4 × bs/256), amp (1 = bf16),
+    base (optional: state_dict-Bytes als uint8 — Ausgangsgewichte statt final32.pt)
   GET /job/<id> (Bearer) → 202 {"state": "running"} solange es läuft, dann 200 = np.savez_compressed mit Tb, Ta (Klasse je Testfeld vor/nach dem Training), pred (Klasse je P-Feld),
-  conf (höchste Wahrscheinlichkeit je P-Feld), model (state_dict als Bytes), secs, device.
+  conf (höchste Wahrscheinlichkeit je P-Feld), model (state_dict als Bytes), secs, device, base ('job' oder 'final32').
 GET /health → {"device": …}
 
 Asynchron, weil ein Proxy davor nach ~60 s abbricht. Immer nur ein Auftrag gleichzeitig (sonst 409); Ergebnis wird beim
@@ -29,7 +30,9 @@ def run(job):
     bs = int(job['bs']) if 'bs' in job else 256
     lr = float(job['lr']) if 'lr' in job else 5e-4 * bs / 256
     amp = bool(int(job['amp'])) if 'amp' in job else False
-    net = Net().to(DEV); net.load_state_dict(torch.load(BASE, map_location=DEV))
+    net = Net().to(DEV)
+    base = 'job' if 'base' in job else 'final32'
+    net.load_state_dict(torch.load(io.BytesIO(job['base'].tobytes()) if 'base' in job else BASE, map_location=DEV))
 
     def predict(C):
         net.eval(); cls, conf = [], []
@@ -54,7 +57,7 @@ def run(job):
     buf = io.BytesIO(); torch.save({k: v.cpu() for k, v in net.state_dict().items()}, buf)
     out = io.BytesIO()
     np.savez_compressed(out, Tb=Tb, Ta=Ta, pred=pred, conf=conf, model=np.frombuffer(buf.getvalue(), np.uint8),
-                        secs=np.float32(secs), device=np.array(DEV))
+                        secs=np.float32(secs), device=np.array(DEV), base=np.array(base))
     return out.getvalue()
 
 

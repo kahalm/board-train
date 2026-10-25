@@ -17,5 +17,5 @@ Server wie bisher auf der CPU (nichts geht verloren).
 - `POST /train` (Bearer-Token) → sofort eine Auftrags-Id; `GET /job/<id>` liefert 202 solange es läuft, dann das Ergebnis
   (asynchron, weil ein Reverse-Proxy davor nach ~60 s abbricht). Datenformat siehe Kopf von `server.py`.
 
-Netz (`net.py`) und Ausgangsgewichte (`final32.pt`) sind Kopien aus `ebook-board-training/hr/` (Stand 25.10.).
+Netz (`net.py`) und Ausgangsgewichte (`final32.pt`, per Auftragsfeld `base` ersetzbar) sind Kopien aus `ebook-board-training/hr/` (Stand 25.10.).
 Ändert sich dort das Netz, Ordner neu bauen.
