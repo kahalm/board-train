@@ -1,0 +1,15 @@
+services:
+  board-train:
+    build: .
+    image: board-train:latest
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8765:8765"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
