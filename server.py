@@ -4,7 +4,7 @@ POST /train   (Authorization: Bearer <TRAIN_TOKEN>, Körper = np.savez_compresse
     X  uint8 [N,32,32]  Trainingsfelder        Y  int64 [N]  Klassen 0..12
     T  uint8 [M,32,32]  Testfelder (vorher/nachher bewerten)
     P  uint8 [K,32,32]  Felder, die nach dem Training gelesen werden
-    epochs (optional, Standard 2)
+    epochs (optional, Standard 2), bs (Losgröße, Standard 256), lr (Standard 5e-4 × bs/256), amp (1 = bf16)
   GET /job/<id> (Bearer) → 202 {"state": "running"} solange es läuft, dann 200 = np.savez_compressed mit Tb, Ta (Klasse je Testfeld vor/nach dem Training), pred (Klasse je P-Feld),
   conf (höchste Wahrscheinlichkeit je P-Feld), model (state_dict als Bytes), secs, device.
 GET /health → {"device": …}
@@ -26,6 +26,9 @@ JOBS = {}
 def run(job):
     X, Y, T, P = (torch.from_numpy(job[k]) for k in ('X', 'Y', 'T', 'P'))
     epochs = int(job['epochs']) if 'epochs' in job else 2
+    bs = int(job['bs']) if 'bs' in job else 256
+    lr = float(job['lr']) if 'lr' in job else 5e-4 * bs / 256
+    amp = bool(int(job['amp'])) if 'amp' in job else False
     net = Net().to(DEV); net.load_state_dict(torch.load(BASE, map_location=DEV))
 
     def predict(C):
@@ -37,13 +40,15 @@ def run(job):
         return (torch.cat(cls).numpy(), torch.cat(conf).numpy()) if cls else (np.zeros(0, np.uint8), np.zeros(0, np.float16))
 
     Tb, _ = predict(T)
-    opt = torch.optim.AdamW(net.parameters(), 5e-4, weight_decay=1e-4); t0 = time.time()
+    opt = torch.optim.AdamW(net.parameters(), lr, weight_decay=1e-4); t0 = time.time()
     Xg, Yg = X.to(DEV), Y.to(DEV)
     for _ in range(epochs):
         net.train(); perm = torch.randperm(len(Yg), device=DEV)
-        for i in range(0, len(Yg), 256):   # gleiche Losgröße wie auf der CPU, damit die Ergebnisse vergleichbar bleiben
-            j = perm[i:i + 256]; x = augment(Xg[j].float().unsqueeze(1) / 255)
-            loss = F.cross_entropy(net(x), Yg[j], label_smoothing=0.05); opt.zero_grad(); loss.backward(); opt.step()
+        for i in range(0, len(Yg), bs):   # 256 = wie auf der CPU; größere Lose lasten die GPU besser aus
+            j = perm[i:i + bs]; x = augment(Xg[j].float().unsqueeze(1) / 255)
+            with torch.autocast(DEV, dtype=torch.bfloat16, enabled=amp):
+                loss = F.cross_entropy(net(x), Yg[j], label_smoothing=0.05)
+            opt.zero_grad(); loss.backward(); opt.step()
     secs = time.time() - t0
     Ta, _ = predict(T); pred, conf = predict(P)
     buf = io.BytesIO(); torch.save({k: v.cpu() for k, v in net.state_dict().items()}, buf)
